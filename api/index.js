@@ -1,6 +1,8 @@
 export const config = {
   runtime: "edge",
+  regions: ["hnd1"],
 };
+
 
 const SECRET_TOKEN = "MY_TOKEN_123";
 
