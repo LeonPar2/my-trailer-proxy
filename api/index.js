@@ -3,7 +3,6 @@ export const config = {
   regions: ["hnd1"],
 };
 
-
 const SECRET_TOKEN = "MY_TOKEN_123";
 
 export default async function handler(request) {
@@ -66,7 +65,10 @@ export default async function handler(request) {
     qualities: {
       "720p": proxiedUrl,
     },
-  }, 200, corsHeaders);
+  }, 200, {
+    ...corsHeaders,
+    "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=43200",
+  });
 }
 
 async function proxyStream(request, serverOrigin, targetUrl, corsHeaders) {
@@ -91,6 +93,7 @@ async function proxyStream(request, serverOrigin, targetUrl, corsHeaders) {
     }).join("\n");
 
     outHeaders.set("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
+    outHeaders.set("Cache-Control", "public, s-maxage=3600");
     return new Response(rewritten, { status: upstream.status, headers: outHeaders });
   }
 
@@ -100,6 +103,7 @@ async function proxyStream(request, serverOrigin, targetUrl, corsHeaders) {
     if (val) outHeaders.set(h, val);
   });
 
+  outHeaders.set("Cache-Control", "public, max-age=86400, s-maxage=86400");
   return new Response(upstream.body, { status: upstream.status, headers: outHeaders });
 }
 
