@@ -95,123 +95,115 @@ export default async function handler(request) {
   }, 200, corsHeaders);
 }
 
-// 三源聯合演員資料查詢：AVWikiDB + Minnano-AV + JAVDatabase
+// 演員資料查詢：JavDB App API（無 Cloudflare 阻擋）+ SeesaaWiki 備援
 async function fetchActorMultiSource(name) {
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept-Language": "ja,en-US;q=0.9",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ja,zh-TW;q=0.9,en-US;q=0.8",
   };
   const aliasMap = {
     "河北彩花": "河北彩伽",
     "橋本有菜": "新ありな",
     "橋本ありな": "新ありな",
-    "三上悠亞": "三上悠亜"
+    "三上悠亞": "三上悠亜",
+    "深田詠美": "深田えいみ",
+    "明日花綺羅": "明日花キララ",
+    "桃乃木香奈": "桃乃木かな",
+    "相澤南": "相沢みなみ",
+    "明里紬": "明里つむぎ",
+    "楓可憐": "楓カレン",
+    "田中檸檬": "楓カレン",
+    "涼森玲夢": "涼森れむ",
+    "八掛海": "八掛うみ",
+    "七澤米亞": "七沢みあ"
   };
   const namesToTry = aliasMap[name] ? [name, aliasMap[name]] : [name];
 
-  const parseJapaneseHtml = (rawHtml) => {
-    const text = rawHtml.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
-    const profile = { name: name };
-
-    const bMatch = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
-    if (bMatch) {
-      profile.birthday = bMatch.at(1) + "-" + bMatch.at(2).padStart(2, "0") + "-" + bMatch.at(3).padStart(2, "0");
+  const md5 = (str) => {
+    const u = new TextEncoder().encode(str);
+    const b = u.length, L = ((b + 8) >> 6) + 1, O = new Uint32Array(L * 16);
+    const K = Uint32Array.from({ length: 64 }, (_, i) => Math.floor((2 ** 32) * Math.abs(Math.sin(i + 1))));
+    const S = Uint8Array.from("7,12,17,22,7,12,17,22,7,12,17,22,7,12,17,22,5,9,14,20,5,9,14,20,5,9,14,20,5,9,14,20,4,11,16,23,4,11,16,23,4,11,16,23,4,11,16,23,6,10,15,21,6,10,15,21,6,10,15,21,6,10,15,21".split(","), Number);
+    for (let i = 0; i < b; i++) O[i >> 2] |= u[i] << ((i % 4) << 3);
+    O[b >> 2] |= 128 << ((b % 4) << 3);
+    O[L * 16 - 2] = b * 8;
+    let a0 = 1732584193, b0 = 4023233417, c0 = 2562383102, d0 = 271733878;
+    for (let i = 0; i < L; i++) {
+      const g = O.subarray(i * 16, (i + 1) * 16);
+      let A = a0, B = b0, C = c0, D = d0;
+      for (let j = 0; j < 64; j++) {
+        let f = 0, idx = 0;
+        if (j < 16) { f = (B & C) | (~B & D); idx = j; }
+        else if (j < 32) { f = (D & B) | (~D & C); idx = (5 * j + 1) & 15; }
+        else if (j < 48) { f = B ^ C ^ D; idx = (3 * j + 5) & 15; }
+        else { f = C ^ (B | ~D); idx = (7 * j) & 15; }
+        const temp = (A + f + K[j] + g[idx]) | 0;
+        const k = S[j];
+        A = D; D = C; C = B; B = (B + ((temp << k) | (temp >>> (32 - k)))) | 0;
+      }
+      a0 = (a0 + A) | 0; b0 = (b0 + B) | 0; c0 = (c0 + C) | 0; d0 = (d0 + D) | 0;
     }
-
-    const hMatch = text.match(/(?:身長|T)\s*[:：]?\s*(\d{3})\s*cm/i) || text.match(/(\d{3})\s*cm/i);
-    if (hMatch) profile.heightCm = hMatch.at(1);
-
-    const wMatch = text.match(/(?:体重|W)\s*[:：]?\s*(\d{2,3})\s*kg/i);
-    if (wMatch) profile.weightKg = wMatch.at(1);
-
-    const bwhMatch = text.match(/B(\d{2,3})\s*(?:[（(]([A-Z])[）)])?\s*[-/／]\s*W(\d{2,3})\s*[-/／]\s*H(\d{2,3})/i);
-    if (bwhMatch) {
-      profile.bustCm = bwhMatch.at(1);
-      if (bwhMatch.at(2)) profile.cup = bwhMatch.at(2).toUpperCase();
-      profile.waistCm = bwhMatch.at(3);
-      profile.hipCm = bwhMatch.at(4);
-    }
-
-    if (!profile.cup) {
-      const cMatch = text.match(/[（(]([A-Z])カップ[）)]|([A-Z])カップ/i);
-      if (cMatch) profile.cup = (cMatch.at(1) || cMatch.at(2) || "").toUpperCase();
-    }
-
-    const bloodMatch = text.match(/血液型\s*[:：]?\s*(AB|A|B|O)型?/i);
-    if (bloodMatch) profile.bloodType = bloodMatch.at(1).toUpperCase();
-
-    return (profile.birthday || profile.heightCm || profile.bustCm) ? profile : null;
+    return Array.from(new Uint8Array(Uint32Array.of(a0, b0, c0, d0).buffer), y => y.toString(16).padStart(2, "0")).join("");
   };
 
+  const makeJdHeaders = () => {
+    const ts = Math.floor(Date.now() / 1000);
+    const secret = "71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa";
+    return {
+      "accept": "application/json",
+      "accept-language": "zh-TW",
+      "user-agent": "Dart/3.5 (dart:io)",
+      "jdSignature": `${ts}.lpw6vgqzsp.${md5(`${ts}${secret}`)}`
+    };
+  };
   for (const kw of namesToTry) {
-    // 來源 1：AVWikiDB（全 UTF-8 編碼，直接支援日文漢字）
+    // 來源 1：JavDB App API（直接回傳結構化 JSON，不受 Cloudflare 阻擋）
     try {
-      const avwHost = "https://avwikidb.com";
-      const sRes = await fetch(avwHost + "/?s=" + encodeURIComponent(kw), { headers: headers });
+      const searchUrl = `https://jdforrepam.com{encodeURIComponent(kw)}&type=actor&page=1&limit=10`;
+      const sRes = await fetch(searchUrl, { headers: makeJdHeaders() });
       if (sRes.ok) {
-        const sHtml = await sRes.text();
-        const idx = sHtml.indexOf("/actress/");
-        if (idx !== -1) {
-          let endIdx = idx + 9;
-          while (endIdx < sHtml.length && "\"'?# >".indexOf(sHtml.charAt(endIdx)) === -1) endIdx++;
-          const dRes = await fetch(avwHost + sHtml.slice(idx, endIdx), { headers: headers });
+        const sJson = await sRes.json();
+        const actors = Array.isArray(sJson?.data?.actors) ? sJson.data.actors : [];
+        const hit = actors.find(a => String(a?.name || "").includes(kw) || String(a?.other_names || "").includes(kw)) || actors.at(0);
+        if (hit?.id) {
+          const dRes = await fetch(`https://jdforrepam.com{encodeURIComponent(hit.id)}`, { headers: makeJdHeaders() });
           if (dRes.ok) {
-            const hit = parseJapaneseHtml(await dRes.text());
-            if (hit) return hit;
-          }
-        }
-      }
-    } catch (e) {}
-    // 來源 2：Minnano-AV（日文老牌資料庫）
-    try {
-      const mnvHost = "https://minnano-av.com";
-      const sRes = await fetch(mnvHost + "/search_result.php?search_scope=actress&search_word=" + encodeURIComponent(kw), { headers: headers });
-      if (sRes.ok) {
-        const sHtml = await sRes.text();
-        const idx = sHtml.indexOf("actress");
-        if (idx !== -1 && sHtml.indexOf(".html", idx) !== -1) {
-          const start = sHtml.lastIndexOf("/", idx);
-          const end = sHtml.indexOf(".html", idx) + 5;
-          if (start !== -1) {
-            const dRes = await fetch(mnvHost + sHtml.slice(start, end), { headers: headers });
-            if (dRes.ok) {
-              const hit = parseJapaneseHtml(await dRes.text());
-              if (hit) return hit;
-            }
+            const dJson = await dRes.json();
+            const act = dJson?.data?.actor || dJson?.data || hit;
+            const profile = { name: name };
+            if (act.birthday) profile.birthday = String(act.birthday).slice(0, 10);
+            if (act.height) profile.heightCm = String(act.height).replace(/[^\d]/g, "");
+            if (act.weight) profile.weightKg = String(act.weight).replace(/[^\d]/g, "");
+            if (act.bust) profile.bustCm = String(act.bust).replace(/[^\d]/g, "");
+            if (act.waist) profile.waistCm = String(act.waist).replace(/[^\d]/g, "");
+            if (act.hip) profile.hipCm = String(act.hip).replace(/[^\d]/g, "");
+            if (act.cup) profile.cup = String(act.cup).replace(/[^A-Z]/gi, "").toUpperCase();
+            if (act.blood_type) profile.bloodType = String(act.blood_type).replace(/[^ABO]/gi, "").toUpperCase();
+            if (profile.birthday || profile.heightCm || profile.bustCm) return profile;
           }
         }
       }
     } catch (e) {}
 
-    // 來源 3：JAVDatabase（英文/漢字雙支援）
+    // 來源 2：SeesaaWiki AV女優総合Wiki（備援）
     try {
-      const jdbHost = "https://javdatabase.com";
-      const sRes = await fetch(jdbHost + "/idols/?_idol_search=" + encodeURIComponent(kw), { headers: headers });
-      if (sRes.ok) {
-        const sHtml = await sRes.text();
-        const idx = sHtml.indexOf("/idols/");
-        if (idx !== -1) {
-          let endIdx = idx + 7;
-          while (endIdx < sHtml.length && "\"'?# >".indexOf(sHtml.charAt(endIdx)) === -1) endIdx++;
-          const slug = sHtml.slice(idx, endIdx);
-          if (slug.length > 8) {
-            const dRes = await fetch(jdbHost + slug, { headers: headers });
-            if (dRes.ok) {
-              const dHtml = await dRes.text();
-              const text = dHtml.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
-              const profile = { name: name };
-              const bMatch = text.match(/DOB:\s*(\d{4}-\d{2}-\d{2})/i);
-              if (bMatch) profile.birthday = bMatch.at(1);
-              const hMatch = text.match(/Height:\s*(\d{3})\s*cm/i);
-              if (hMatch) profile.heightCm = hMatch.at(1);
-              const mMatch = text.match(/Measurements:\s*(\d{2,3})-(\d{2,3})-(\d{2,3})/i);
-              if (mMatch) { profile.bustCm = mMatch.at(1); profile.waistCm = mMatch.at(2); profile.hipCm = mMatch.at(3); }
-              const cMatch = text.match(/Cup:\s*([A-Z])/i);
-              if (cMatch) profile.cup = cMatch.at(1).toUpperCase();
-              if (profile.birthday || profile.heightCm || profile.bustCm) return profile;
-            }
-          }
+      const wRes = await fetch("https://seesaawiki.jp" + encodeURIComponent(kw), { headers });
+      if (wRes.ok) {
+        const text = (await wRes.text()).replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
+        const profile = { name: name };
+        const bMatch = text.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+        if (bMatch) profile.birthday = `${bMatch.at(1)}-${bMatch.at(2).padStart(2, "0")}-${bMatch.at(3).padStart(2, "0")}`;
+        const hMatch = text.match(/(?:身長|T)\s*[:：]?\s*(\d{3})\s*cm/i);
+        if (hMatch) profile.heightCm = hMatch.at(1);
+        const bwhMatch = text.match(/B\s*(\d{2,3})\s*(?:[（(]([A-Z])[）)])?\s*[-/／・\s]+W\s*(\d{2,3})\s*[-/／・\s]+H\s*(\d{2,3})/i);
+        if (bwhMatch) {
+          profile.bustCm = bwhMatch.at(1);
+          if (bwhMatch.at(2)) profile.cup = bwhMatch.at(2).toUpperCase();
+          profile.waistCm = bwhMatch.at(3);
+          profile.hipCm = bwhMatch.at(4);
         }
+        if (profile.birthday || profile.heightCm || profile.bustCm) return profile;
       }
     } catch (e) {}
   }
