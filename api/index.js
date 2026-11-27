@@ -95,66 +95,82 @@ export default async function handler(request) {
   }, 200, corsHeaders);
 }
 
-// 從 SeesaaWiki 抓取演員生日、身高、三圍與罩杯
+// 從 SeesaaWiki 抓取演員生日、身高、三圍與罩杯（含改名別名匹配）
 async function fetchActorFromSeesaa(name) {
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     "Accept-Language": "ja,en-US;q=0.9",
   };
   const wikiHost = "https://" + "seesaawiki.jp";
-  try {
-    const sRes = await fetch(wikiHost + "/w/sougouwiki/search?keywords=" + encodeURIComponent(name), { headers: headers });
-    if (!sRes.ok) return null;
-    const sHtml = await sRes.text();
+  const aliasMap = {
+    "河北彩花": "河北彩伽",
+    "橋本有菜": "新ありな",
+    "橋本ありな": "新ありな",
+    "三上悠亞": "三上悠亜"
+  };
+  const candidates = aliasMap[name] ? [name, aliasMap[name]] : [name];
 
-    const idx = sHtml.indexOf("/w/sougouwiki/d/");
-    if (idx === -1) return null;
+  for (const kw of candidates) {
+    try {
+      const sRes = await fetch(wikiHost + "/w/sougouwiki/search?keywords=" + encodeURIComponent(kw), { headers: headers });
+      if (!sRes.ok) continue;
+      const sHtml = await sRes.text();
 
-    let endIdx = idx + 16;
-    while (endIdx < sHtml.length) {
-      const ch = sHtml.charAt(endIdx);
-      if (ch === '"' || ch === "'" || ch === "?" || ch === "#" || ch === " " || ch === ">") break;
-      endIdx++;
-    }
-    const detailPath = sHtml.slice(idx, endIdx);
-    const dRes = await fetch(wikiHost + detailPath, { headers: headers });
-    if (!dRes.ok) return null;
+      let detailPath = "";
+      let pos = 0;
+      while (pos < sHtml.length) {
+        const idx = sHtml.indexOf("/w/sougouwiki/d/", pos);
+        if (idx === -1) break;
+        let endIdx = idx + 16;
+        while (endIdx < sHtml.length && "\"'?# >".indexOf(sHtml.charAt(endIdx)) === -1) endIdx++;
+        const pathCandidate = sHtml.slice(idx, endIdx);
+        const snippet = sHtml.slice(idx, Math.min(sHtml.length, endIdx + 180));
+        if (snippet.indexOf(kw) !== -1 || snippet.indexOf(name) !== -1) {
+          detailPath = pathCandidate;
+          break;
+        }
+        pos = endIdx;
+      }
 
-    const dHtml = await dRes.text();
-    const text = dHtml.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
-    const profile = { name: name };
+      if (!detailPath) continue;
+      const dRes = await fetch(wikiHost + detailPath, { headers: headers });
+      if (!dRes.ok) continue;
 
-    const bMatch = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
-    if (bMatch) {
-      profile.birthday = bMatch.at(1) + "-" + bMatch.at(2).padStart(2, "0") + "-" + bMatch.at(3).padStart(2, "0");
-    }
+      const dHtml = await dRes.text();
+      const text = dHtml.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
+      const profile = { name: name };
 
-    const hMatch = text.match(/(\d{3})\s*cm/i);
-    if (hMatch) profile.heightCm = hMatch.at(1);
+      const bMatch = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+      if (bMatch) {
+        profile.birthday = bMatch.at(1) + "-" + bMatch.at(2).padStart(2, "0") + "-" + bMatch.at(3).padStart(2, "0");
+      }
 
-    const wMatch = text.match(/(\d{2,3})\s*kg/i);
-    if (wMatch) profile.weightKg = wMatch.at(1);
+      const hMatch = text.match(/(\d{3})\s*cm/i);
+      if (hMatch) profile.heightCm = hMatch.at(1);
 
-    const bwhMatch = text.match(/B(\d{2,3})\s*(?:[（(]([A-Z])[）)])?\s*[-/／]\s*W(\d{2,3})\s*[-/／]\s*H(\d{2,3})/i);
-    if (bwhMatch) {
-      profile.bustCm = bwhMatch.at(1);
-      if (bwhMatch.at(2)) profile.cup = bwhMatch.at(2).toUpperCase();
-      profile.waistCm = bwhMatch.at(3);
-      profile.hipCm = bwhMatch.at(4);
-    }
+      const wMatch = text.match(/(\d{2,3})\s*kg/i);
+      if (wMatch) profile.weightKg = wMatch.at(1);
 
-    if (!profile.cup) {
-      const cMatch = text.match(/[（(]([A-Z])カップ[）)]|([A-Z])カップ/i);
-      if (cMatch) profile.cup = (cMatch.at(1) || cMatch.at(2) || "").toUpperCase();
-    }
+      const bwhMatch = text.match(/B(\d{2,3})\s*(?:[（(]([A-Z])[）)])?\s*[-/／]\s*W(\d{2,3})\s*[-/／]\s*H(\d{2,3})/i);
+      if (bwhMatch) {
+        profile.bustCm = bwhMatch.at(1);
+        if (bwhMatch.at(2)) profile.cup = bwhMatch.at(2).toUpperCase();
+        profile.waistCm = bwhMatch.at(3);
+        profile.hipCm = bwhMatch.at(4);
+      }
 
-    const bloodMatch = text.match(/血液型\s*[:：]?\s*(AB|A|B|O)型?/i);
-    if (bloodMatch) profile.bloodType = bloodMatch.at(1).toUpperCase();
+      if (!profile.cup) {
+        const cMatch = text.match(/[（(]([A-Z])カップ[）)]|([A-Z])カップ/i);
+        if (cMatch) profile.cup = (cMatch.at(1) || cMatch.at(2) || "").toUpperCase();
+      }
 
-    return (profile.birthday || profile.heightCm || profile.bustCm) ? profile : null;
-  } catch (e) {
-    return null;
+      const bloodMatch = text.match(/血液型\s*[:：]?\s*(AB|A|B|O)型?/i);
+      if (bloodMatch) profile.bloodType = bloodMatch.at(1).toUpperCase();
+
+      if (profile.birthday || profile.heightCm || profile.bustCm) return profile;
+    } catch (e) {}
   }
+  return null;
 }
 
 async function proxyStream(request, serverOrigin, targetUrl, corsHeaders) {
