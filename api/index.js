@@ -185,7 +185,7 @@ async function fetchActorProfile(name) {
 
     return profile.birthday || profile.heightCm || profile.bustCm ? profile : null;
   };
-  for (const kw of namesToTry) {
+    for (const kw of namesToTry) {
     // 來源 1：JAVDatabase WordPress JSON API
     try {
       const res = await fetch(
@@ -321,3 +321,4 @@ function jsonOut(obj, status = 200, extraHeaders = {}) {
     headers: { "Content-Type": "application/json; charset=utf-8", ...extraHeaders },
   });
 }
+
